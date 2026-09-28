@@ -50,7 +50,8 @@ tidy.py [mode] [options]
   mode                  by-type | by-date | by-type-date
   --dir PATH            folder to tidy (default: current)
   --apply               actually move files (default: dry run)
-  --undo                revert the last applied run
+  --undo                replay moves.log newest-first and restore files;
+                        the journal is kept if anything is missing/failed
   -r, --recursive       include subfolders
   -e, --exclude PATTERN skip matching files, glob-style (repeatable)
   --month               by-date: use YYYY-MM folders instead of YYYY
@@ -69,9 +70,16 @@ tidy.py [mode] [options]
   ```json
   {"from": "C:/Downloads/a.txt", "to": "C:/Downloads/Documents/a.txt", "ts": "2024-05-01T12:00:00"}
   ```
-  `--undo` replays the journal in reverse, restoring every file to its
-  original location, then deletes the journal. Files that are already
-  gone are skipped with a warning.
+  `--undo` replays the whole journal (all runs combined) newest-first,
+  restoring every file to its original location, then deletes the
+  journal. If the original name is taken, the file comes back as
+  `name (1).ext` — the actual destination is printed for every restore.
+  Files that are already gone are skipped with a warning.
+  **Important:** the journal is deleted only when *every* entry was
+  restored. If some files are missing or a move fails, `moves.log` is
+  kept so you can fix the cause and run `--undo` again (already
+  restored files are then skipped as missing). Undo also reports
+  non-zero exit code when it could not finish cleanly.
 - **Errors don't stop the run.** Locked or read-protected files are
   reported and skipped; everything else is still processed.
 - `moves.log` and the script itself are never moved.
@@ -96,8 +104,13 @@ python tidy.py --undo --dir tidy-demo             # restore
   по расширению), `by-date` (папки-годы, с `--month` — `ГГГГ-ММ`),
   `by-type-date` (комбо: `Images/2024-03`).
 - **Отмена:** каждое перемещение пишется в журнал `moves.log`
-  (JSON: from, to, ts). `python tidy.py --undo --dir ПАПКА` вернёт всё
-  как было.
+  (JSON: from, to, ts). `python tidy.py --undo --dir ПАПКА` проигрывает
+  весь накопленный журнал в обратном порядке и возвращает файлы на место;
+  при конфликте имён файл вернётся как `имя (1).ext` — фактический путь
+  восстановления печатается для каждого файла. Журнал удаляется только
+  если все файлы вернулись: при пропавших файлах или ошибках `moves.log`
+  сохраняется, чтобы можно было устранить причину и повторить `--undo`
+  (уже восстановленные файлы при повторе пропускаются как отсутствующие).
 - **Конфликты имён** решаются суффиксом: `report (1).pdf`.
 - **Ошибки** (нет прав, файл занят) не прерывают работу — файл
   пропускается с предупреждением.

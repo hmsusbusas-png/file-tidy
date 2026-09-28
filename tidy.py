@@ -112,9 +112,15 @@ def collect_files(root: Path, recursive: bool, exclude: list[str]) -> list[Path]
     it = root.rglob("*") if recursive else root.iterdir()
     files = []
     for p in it:
-        if not p.is_file() or p.name == LOG_NAME:
-            continue
-        if p.resolve() == Path(__file__).resolve():
+        try:
+            # is_file() follows symlinks: a broken link returns False here,
+            # but stat/permission problems must not kill the whole plan.
+            if not p.is_file() or p.name == LOG_NAME:
+                continue
+            if p.resolve() == Path(__file__).resolve():
+                continue
+        except OSError as e:
+            print(yellow(f"  ! skipping unreadable entry {p.name} ({e})"))
             continue
         if is_excluded(str(p.relative_to(root)), exclude):
             continue
@@ -137,7 +143,11 @@ def unique_path(dst: Path) -> Path:
 def plan(root: Path, mode: str, month: bool, recursive: bool, exclude: list[str]) -> list[tuple[Path, Path]]:
     moves = []
     for p in collect_files(root, recursive, exclude):
-        dst = target_for(p, root, mode, month) / p.name
+        try:
+            dst = target_for(p, root, mode, month) / p.name
+        except OSError as e:  # stat failed ( vanished file, broken link, no access)
+            print(yellow(f"  ! skipping {p.name}: cannot stat ({e})"))
+            continue
         if dst == p:
             continue  # already in place
         if dst.exists():
@@ -168,7 +178,12 @@ def apply_moves(root: Path, moves: list[tuple[Path, Path]]) -> tuple[int, list[t
 # --- Undo ---------------------------------------------------------------------
 
 def undo(root: Path) -> int:
-    """Revert moves recorded in moves.log, newest first."""
+    """Revert moves recorded in moves.log, newest first.
+
+    The journal is deleted only when every entry was restored. If some
+    files are missing or a move fails, the journal is kept so --undo
+    can be retried later (already restored files are skipped as missing).
+    """
     log = root / LOG_NAME
     if not log.exists():
         print(red(f"No {LOG_NAME} found in {root} - nothing to undo."))
@@ -191,12 +206,20 @@ def undo(root: Path) -> int:
             continue
         try:
             dst.parent.mkdir(parents=True, exist_ok=True)
-            shutil.move(str(src), str(unique_path(dst)))
+            actual = unique_path(dst)
+            shutil.move(str(src), str(actual))
             restored += 1
-            print(dim(f"  restored {dst.name}"))
+            print(dim(f"  restored {src.name} -> {actual}"))
         except OSError as err:
             failed += 1
             print(red(f"  ! failed: {src.name} ({err})"))
+    if missing or failed:
+        print(yellow(
+            f"Undo finished with problems: {restored} restored, {missing} missing, "
+            f"{failed} failed.\n"
+            f"  Journal kept for retry: {log} (fix the cause and run --undo again;\n"
+            f"  already restored files will be skipped as missing)."))
+        return 1
     log.unlink()
     # clean up folders we emptied (only dirs that files were moved out of)
     touched = {Path(e["from"]).parent for e in entries}
@@ -223,7 +246,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--apply", action="store_true",
                    help="actually move files (default: dry run)")
     p.add_argument("--undo", action="store_true",
-                   help=f"revert the last applied run from {LOG_NAME}")
+                   help=f"restore files from {LOG_NAME} (journal is kept "
+                        f"if anything is missing or fails)")
     p.add_argument("-r", "--recursive", action="store_true", help="include subfolders")
     p.add_argument("-e", "--exclude", action="append", default=[], metavar="PATTERN",
                    help="skip files matching a glob pattern (repeatable)")
