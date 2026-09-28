@@ -150,6 +150,8 @@ def apply_moves(root: Path, moves: list[tuple[Path, Path]]) -> tuple[int, list[t
     done, failed = [], []
     for src, dst in moves:
         try:
+            if dst.exists():  # re-check: plan was printed before any moves
+                dst = unique_path(dst)
             dst.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(src), str(dst))
             done.append({"from": str(src), "to": str(dst),
@@ -196,6 +198,14 @@ def undo(root: Path) -> int:
             failed += 1
             print(red(f"  ! failed: {src.name} ({err})"))
     log.unlink()
+    # clean up folders we emptied (only dirs that files were moved out of)
+    touched = {Path(e["from"]).parent for e in entries}
+    for d in sorted(touched, key=lambda p: len(p.parts), reverse=True):
+        if d != root and d.is_dir() and not any(d.iterdir()):
+            try:
+                d.rmdir()
+            except OSError:
+                pass
     print(green(f"Undo complete: {restored} restored, {missing} missing, {failed} failed."))
     return 0
 
