@@ -163,6 +163,43 @@ def apply_moves(root: Path, moves: list[tuple[Path, Path]]) -> tuple[int, list[t
     return len(done), failed
 
 
+# --- Undo ---------------------------------------------------------------------
+
+def undo(root: Path) -> int:
+    """Revert moves recorded in moves.log, newest first."""
+    log = root / LOG_NAME
+    if not log.exists():
+        print(red(f"No {LOG_NAME} found in {root} - nothing to undo."))
+        return 1
+    entries = []
+    for line in log.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            entries.append(json.loads(line))
+        except json.JSONDecodeError:
+            print(yellow(f"Skipping corrupt log line: {line[:60]}"))
+    restored = missing = failed = 0
+    for e in reversed(entries):
+        src, dst = Path(e["to"]), Path(e["from"])
+        if not src.exists():
+            missing += 1
+            print(yellow(f"  ? missing, skipped: {src.name}"))
+            continue
+        try:
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(src), str(unique_path(dst)))
+            restored += 1
+            print(dim(f"  restored {dst.name}"))
+        except OSError as err:
+            failed += 1
+            print(red(f"  ! failed: {src.name} ({err})"))
+    log.unlink()
+    print(green(f"Undo complete: {restored} restored, {missing} missing, {failed} failed."))
+    return 0
+
+
 # --- CLI ----------------------------------------------------------------------
 
 def build_parser() -> argparse.ArgumentParser:
@@ -175,6 +212,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--dir", default=".", type=Path, help="folder to tidy (default: current)")
     p.add_argument("--apply", action="store_true",
                    help="actually move files (default: dry run)")
+    p.add_argument("--undo", action="store_true",
+                   help=f"revert the last applied run from {LOG_NAME}")
     p.add_argument("-r", "--recursive", action="store_true", help="include subfolders")
     p.add_argument("-e", "--exclude", action="append", default=[], metavar="PATTERN",
                    help="skip files matching a glob pattern (repeatable)")
@@ -194,10 +233,12 @@ def show_plan(root: Path, moves: list[tuple[Path, Path]]) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    root = args.dir.expanduser().resolve()
+    if args.undo:
+        return undo(root)
     if not args.mode:
         build_parser().print_help()
         return 0
-    root = args.dir.expanduser().resolve()
     if not root.is_dir():
         print(red(f"Not a directory: {root}"))
         return 1
