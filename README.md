@@ -1,38 +1,23 @@
 # File Tidy
 
-A tiny command-line tool that organizes messy folders — sorts files by
-type, by date, or both. Safe by default: it shows a plan first and moves
-nothing until you say `--apply`. Every move is logged, so any run can be
-reverted with a single `--undo`.
+Крошечная консольная утилита для наведения порядка в папках: раскладывает файлы по типу, по дате или по обоим признакам сразу. Безопасна по умолчанию — сначала показывает план и ничего не перемещает, пока не скажете `--apply`. Каждое перемещение пишется в журнал, поэтому любой запуск можно откатить одной командой `--undo`.
 
-**No dependencies** — pure Python 3 standard library. Python 3.10+.
+Зависимостей нет — чистая стандартная библиотека Python 3.10+.
 
-## Quick start
+## Возможности
 
-```bash
-# preview what would happen (nothing is moved)
-python tidy.py by-type --dir ~/Downloads
+- три режима раскладки: `by-type` (папка на категорию), `by-date` (папки-годы, с `--month` — `ГГГГ-ММ`), `by-type-date` (комбо: `Images/2024-03`)
+- даты берутся из времени изменения файла (mtime)
+- dry run по умолчанию: без `--apply` печатается только таблица планируемых перемещений «файл → папка»
+- `--undo` проигрывает журнал `moves.log` с конца и возвращает файлы на исходные места
+- конфликты имён решаются числовым суффиксом: `report.pdf`, `report (1).pdf`, `report (2).pdf`…
+- рекурсия по подпапкам (`-r`) и исключения по glob (`-e`, можно повторять)
+- занятые или защищённые файлы не прерывают работу: сообщаются и пропускаются, остальное обрабатывается
+- `moves.log` и сам скрипт никогда не перемещаются
 
-# actually move the files
-python tidy.py by-type --dir ~/Downloads --apply
+## Категории (by-type)
 
-# change your mind
-python tidy.py --undo --dir ~/Downloads
-```
-
-## Modes
-
-| Mode           | Layout                        | Example                    |
-| -------------- | ----------------------------- | -------------------------- |
-| `by-type`      | one folder per category       | `Images/photo.jpg`         |
-| `by-date`      | year folders (`--month` for `YYYY-MM`) | `2024/` or `2024-03/` |
-| `by-type-date` | category + date               | `Images/2024-03/photo.jpg` |
-
-Dates are taken from the file modification time (mtime).
-
-## Categories (by-type)
-
-| Category   | Extensions |
+| Категория  | Расширения |
 | ---------- | ---------- |
 | Images     | jpg, jpeg, png, gif, webp, bmp, svg, ico, tif, tiff, heic |
 | Documents  | pdf, doc, docx, xls, xlsx, ppt, pptx, txt, md, rtf, odt, csv |
@@ -40,86 +25,87 @@ Dates are taken from the file modification time (mtime).
 | Video      | mp4, mkv, avi, mov, webm, wmv, flv, m4v |
 | Archives   | zip, rar, 7z, tar, gz, bz2, xz, iso |
 | Code       | py, js, ts, html, css, json, xml, yml, yaml, sh, bat, ps1, sql, c, cpp, java, go, rs |
-| Other      | everything else |
+| Other      | всё остальное |
 
-## Options
+## Опции
 
 ```
-tidy.py [mode] [options]
+tidy.py [режим] [опции]
 
-  mode                  by-type | by-date | by-type-date
-  --dir PATH            folder to tidy (default: current)
-  --apply               actually move files (default: dry run)
-  --undo                replay moves.log newest-first and restore files;
-                        the journal is kept if anything is missing/failed
-  -r, --recursive       include subfolders
-  -e, --exclude PATTERN skip matching files, glob-style (repeatable)
-  --month               by-date: use YYYY-MM folders instead of YYYY
-  -V, --version         show version
-  -h, --help            show help
+  режим                 by-type | by-date | by-type-date
+  --dir PATH            папка для разбора (по умолчанию текущая)
+  --apply               реально перемещать файлы (по умолчанию dry run)
+  --undo                проигрывает moves.log с конца и возвращает файлы;
+                        журнал сохраняется, если что-то пропало или упало
+  -r, --recursive       включая подпапки
+  -e, --exclude PATTERN пропускать подходящие файлы, glob (можно повторять)
+  --month               by-date: папки ГГГГ-ММ вместо ГГГГ
+  -V, --version         версия
+  -h, --help            справка
 ```
 
-## Safety
+## Быстрый старт
 
-- **Dry run by default.** Without `--apply` you only get a table of
-  planned moves.
-- **Name conflicts** are resolved with a numeric suffix: `report.pdf`,
-  `report (1).pdf`, `report (2).pdf`…
-- **Undo journal.** Each applied run appends JSON lines to `moves.log`
-  next to the sorted folder:
-  ```json
-  {"from": "C:/Downloads/a.txt", "to": "C:/Downloads/Documents/a.txt", "ts": "2024-05-01T12:00:00"}
-  ```
-  `--undo` replays the whole journal (all runs combined) newest-first,
-  restoring every file to its original location, then deletes the
-  journal. If the original name is taken, the file comes back as
-  `name (1).ext` — the actual destination is printed for every restore.
-  Files that are already gone are skipped with a warning.
-  **Important:** the journal is deleted only when *every* entry was
-  restored. If some files are missing or a move fails, `moves.log` is
-  kept so you can fix the cause and run `--undo` again (already
-  restored files are then skipped as missing). Undo also reports
-  non-zero exit code when it could not finish cleanly.
-- **Errors don't stop the run.** Locked or read-protected files are
-  reported and skipped; everything else is still processed.
-- `moves.log` and the script itself are never moved.
+1. Склонируйте репозиторий. Устанавливать ничего не нужно — хватит Python 3.10+.
+2. Посмотрите план (ничего не перемещается):
 
-## Testing
+   ```bash
+   python tidy.py by-type --dir ~/Downloads
+   ```
+
+3. Разложите файлы по-настоящему:
+
+   ```bash
+   python tidy.py by-type --dir ~/Downloads --apply
+   ```
+
+4. Передумали — верните как было:
+
+   ```bash
+   python tidy.py --undo --dir ~/Downloads
+   ```
+
+## Журнал отмены
+
+Каждый применённый запуск дописывает JSON-строки в `moves.log` рядом с разобранной папкой:
+
+```json
+{"from": "C:/Downloads/a.txt", "to": "C:/Downloads/Documents/a.txt", "ts": "2024-05-01T12:00:00"}
+```
+
+`--undo` проигрывает весь накопленный журнал (все запуски вместе) с конца, возвращая каждый файл на исходное место, затем удаляет журнал. Если исходное имя занято, файл вернётся как `имя (1).ext` — фактический путь восстановления печатается для каждого файла. Пропавшие файлы пропускаются с предупреждением. Журнал удаляется только когда вернулись все записи: если что-то пропало или перемещение упало, `moves.log` сохраняется — устраните причину и запустите `--undo` снова (уже восстановленные файлы при повторе пропускаются как отсутствующие). Если откат не удалось завершить чисто, утилита возвращает ненулевой код выхода.
+
+## Проверка на демо-папке
 
 ```bash
-python scripts/make_fixtures.py   # creates ./tidy-demo with 18 sample files
+python scripts/make_fixtures.py   # создаёт ./tidy-demo с 18 файлами-примерами
 python tidy.py by-type --dir tidy-demo            # dry run
-python tidy.py by-type --dir tidy-demo --apply    # sort
-python tidy.py --undo --dir tidy-demo             # restore
+python tidy.py by-type --dir tidy-demo --apply    # разложить
+python tidy.py --undo --dir tidy-demo             # вернуть назад
 ```
 
-## Русский
+## Честно об ограничениях
 
-**File Tidy** — крошечная консольная утилита для наведения порядка в
-папках: раскладывает файлы по типу, дате или и тому и другому.
+- `--undo` откатывает весь накопленный журнал целиком — все запуски разом, выбрать «только последний запуск» нельзя.
+- журнал удаляется лишь при полном успехе; при пропавших файлах или ошибках `moves.log` остаётся на месте, чтобы можно было повторить откат.
 
-- **Безопасно по умолчанию:** без `--apply` показывается только план
-  (таблица «файл → папка»), ничего не перемещается.
-- **Режимы:** `by-type` (Images/Documents/Audio/Video/Archives/Code/Other
-  по расширению), `by-date` (папки-годы, с `--month` — `ГГГГ-ММ`),
-  `by-type-date` (комбо: `Images/2024-03`).
-- **Отмена:** каждое перемещение пишется в журнал `moves.log`
-  (JSON: from, to, ts). `python tidy.py --undo --dir ПАПКА` проигрывает
-  весь накопленный журнал в обратном порядке и возвращает файлы на место;
-  при конфликте имён файл вернётся как `имя (1).ext` — фактический путь
-  восстановления печатается для каждого файла. Журнал удаляется только
-  если все файлы вернулись: при пропавших файлах или ошибках `moves.log`
-  сохраняется, чтобы можно было устранить причину и повторить `--undo`
-  (уже восстановленные файлы при повторе пропускаются как отсутствующие).
-- **Конфликты имён** решаются суффиксом: `report (1).pdf`.
-- **Ошибки** (нет прав, файл занят) не прерывают работу — файл
-  пропускается с предупреждением.
+## Структура
 
-```bash
-python tidy.py by-type --dir ~/Downloads            # показать план
-python tidy.py by-type --dir ~/Downloads --apply    # разложить
-python tidy.py --undo --dir ~/Downloads             # вернуть назад
-python tidy.py by-date --dir ~/Downloads --month -r -e "*.tmp"
+```
+file-tidy/
+├── tidy.py                 # вся утилита: режимы, план, перемещение, undo
+├── scripts/
+│   └── make_fixtures.py    # генерирует ./tidy-demo с 18 файлами-примерами
+├── moves.log               # журнал перемещений (создаётся рядом с разобранной папкой)
+└── README.md
 ```
 
-Зависимостей нет — только стандартная библиотека Python.
+## Стек
+
+Чистый Python 3.10+, только стандартная библиотека.
+
+---
+
+## EN
+
+A tiny CLI tool that organizes messy folders — sorts files by type, by date, or both. Safe by default: shows a plan first and moves nothing until `--apply`; every move is journaled, so any run can be reverted with `--undo`. No dependencies — pure Python 3 standard library (3.10+). Details in the Russian section above.
