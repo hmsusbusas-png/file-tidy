@@ -1,19 +1,11 @@
 #!/usr/bin/env python3
-"""Create a messy temp folder with sample files for testing tidy.py.
-
-Usage:
-    python scripts/make_fixtures.py [target]
-
-Creates ./tidy-demo by default: ~18 files of different types with
-scattered modification dates (set via os.utime).
-"""
+"""Create a messy folder of sample files for tidy.py (default: ./tidy-demo)."""
 
 import os
 import sys
 import time
 from pathlib import Path
 
-# name -> (year, month, day) for the fake mtime
 FILES = {
     "photo_vacation.jpg": (2023, 5, 14),
     "screenshot.png": (2024, 1, 3),

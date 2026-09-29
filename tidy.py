@@ -1,15 +1,5 @@
 #!/usr/bin/env python3
-"""File Tidy - a tiny CLI that organizes messy folders.
-
-Sorts files by type, date, or both. Runs in dry-run mode by default:
-nothing is moved until you pass --apply. Every move is logged, so a run
-can be reverted with --undo.
-
-Examples:
-    python tidy.py by-type --dir ~/Downloads
-    python tidy.py by-date --dir ~/Downloads --month --apply
-    python tidy.py --undo --dir ~/Downloads
-"""
+"""File Tidy - a tiny CLI that organizes messy folders (dry-run by default, --apply to move, --undo to revert)."""
 
 from __future__ import annotations
 
@@ -21,8 +11,6 @@ from pathlib import Path
 VERSION = "1.0.0"
 LOG_NAME = "moves.log"
 
-
-# --- ANSI colors with graceful fallback --------------------------------------
 
 def _colors_enabled() -> bool:
     if os.environ.get("NO_COLOR"):
@@ -67,8 +55,6 @@ def bold(t: str) -> str:
     return _c("1", t)
 
 
-# --- Sorting logic ------------------------------------------------------------
-
 import fnmatch
 import json
 import shutil
@@ -91,15 +77,14 @@ def categorize(path: Path) -> str:
     return EXT_TO_CAT.get(path.suffix.lower(), OTHER)
 
 
-def target_for(path: Path, root: Path, mode: str, month: bool) -> Path:
-    """Directory where `path` should live in the given mode."""
+def dest_for(path: Path, root: Path, mode: str, month: bool) -> Path:
     mtime = datetime.fromtimestamp(path.stat().st_mtime)
     date_part = mtime.strftime("%Y-%m") if month else mtime.strftime("%Y")
     if mode == "by-type":
         return root / categorize(path)
     if mode == "by-date":
         return root / date_part
-    return root / categorize(path) / date_part  # by-type-date
+    return root / categorize(path) / date_part
 
 
 def is_excluded(rel: str, patterns: list[str]) -> bool:
@@ -108,13 +93,12 @@ def is_excluded(rel: str, patterns: list[str]) -> bool:
     return any(fnmatch.fnmatch(rel, p) or fnmatch.fnmatch(name, p) for p in patterns)
 
 
-def collect_files(root: Path, recursive: bool, exclude: list[str]) -> list[Path]:
+def scan(root: Path, recursive: bool, exclude: list[str]) -> list[Path]:
     it = root.rglob("*") if recursive else root.iterdir()
     files = []
     for p in it:
         try:
-            # is_file() follows symlinks: a broken link returns False here,
-            # but stat/permission problems must not kill the whole plan.
+            # is_file() follows symlinks; broken links and unreadable entries must not kill the scan
             if not p.is_file() or p.name == LOG_NAME:
                 continue
             if p.resolve() == Path(__file__).resolve():
@@ -128,8 +112,7 @@ def collect_files(root: Path, recursive: bool, exclude: list[str]) -> list[Path]
     return sorted(files)
 
 
-def unique_path(dst: Path) -> Path:
-    """Add ' (1)', ' (2)', ... before the suffix until the name is free."""
+def free_name(dst: Path) -> Path:
     if not dst.exists():
         return dst
     n = 1
@@ -142,26 +125,26 @@ def unique_path(dst: Path) -> Path:
 
 def plan(root: Path, mode: str, month: bool, recursive: bool, exclude: list[str]) -> list[tuple[Path, Path]]:
     moves = []
-    for p in collect_files(root, recursive, exclude):
+    for p in scan(root, recursive, exclude):
         try:
-            dst = target_for(p, root, mode, month) / p.name
-        except OSError as e:  # stat failed ( vanished file, broken link, no access)
+            dst = dest_for(p, root, mode, month) / p.name
+        except OSError as e:
             print(yellow(f"  ! skipping {p.name}: cannot stat ({e})"))
             continue
         if dst == p:
-            continue  # already in place
+            continue
         if dst.exists():
-            dst = unique_path(dst)
+            dst = free_name(dst)
         moves.append((p, dst))
     return moves
 
 
-def apply_moves(root: Path, moves: list[tuple[Path, Path]]) -> tuple[int, list[tuple[Path, OSError]]]:
+def move_all(root: Path, moves: list[tuple[Path, Path]]) -> tuple[int, list[tuple[Path, OSError]]]:
     done, failed = [], []
     for src, dst in moves:
         try:
-            if dst.exists():  # re-check: plan was printed before any moves
-                dst = unique_path(dst)
+            if dst.exists():
+                dst = free_name(dst)
             dst.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(src), str(dst))
             done.append({"from": str(src), "to": str(dst),
@@ -175,15 +158,8 @@ def apply_moves(root: Path, moves: list[tuple[Path, Path]]) -> tuple[int, list[t
     return len(done), failed
 
 
-# --- Undo ---------------------------------------------------------------------
-
 def undo(root: Path) -> int:
-    """Revert moves recorded in moves.log, newest first.
-
-    Restored entries are removed from the journal. Entries that are still
-    missing or blocked stay there, so a later ``--undo`` can retry only the
-    unfinished work instead of counting already restored files as missing.
-    """
+    """Revert moves recorded in moves.log, newest first; unfinished entries stay in the journal for a retry."""
     log = root / LOG_NAME
     if not log.exists():
         print(red(f"No {LOG_NAME} found in {root} - nothing to undo."))
@@ -210,7 +186,7 @@ def undo(root: Path) -> int:
         src, dst = Path(entry["to"]), Path(entry["from"])
         if not src.exists():
             if dst.exists():
-                # This entry was already restored during an earlier retry.
+                # already restored by an earlier --undo
                 continue
             missing += 1
             remaining.append(entry)
@@ -218,7 +194,7 @@ def undo(root: Path) -> int:
             continue
         try:
             dst.parent.mkdir(parents=True, exist_ok=True)
-            actual = unique_path(dst)
+            actual = free_name(dst)
             shutil.move(str(src), str(actual))
             restored += 1
             print(dim(f"  restored {src.name} -> {actual}"))
@@ -250,8 +226,6 @@ def undo(root: Path) -> int:
     return 0
 
 
-# --- CLI ----------------------------------------------------------------------
-
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="tidy",
@@ -274,7 +248,7 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
-def show_plan(root: Path, moves: list[tuple[Path, Path]]) -> None:
+def print_plan(root: Path, moves: list[tuple[Path, Path]]) -> None:
     print(bold(f"\nPlan for {root}  ({len(moves)} file(s))\n"))
     w = max((len(str(src)) for src, _ in moves), default=4)
     for src, dst in moves:
@@ -297,10 +271,10 @@ def main(argv: list[str] | None = None) -> int:
     if not moves:
         print(green("Nothing to do - folder is already tidy."))
         return 0
-    show_plan(root, moves)
+    print_plan(root, moves)
     if not args.apply:
         return 0
-    moved, failed = apply_moves(root, moves)
+    moved, failed = move_all(root, moves)
     print(green(f"Moved {moved} file(s)."))
     for src, err in failed:
         print(red(f"  ! {src.name}: {err}"))
