@@ -180,29 +180,41 @@ def apply_moves(root: Path, moves: list[tuple[Path, Path]]) -> tuple[int, list[t
 def undo(root: Path) -> int:
     """Revert moves recorded in moves.log, newest first.
 
-    The journal is deleted only when every entry was restored. If some
-    files are missing or a move fails, the journal is kept so --undo
-    can be retried later (already restored files are skipped as missing).
+    Restored entries are removed from the journal. Entries that are still
+    missing or blocked stay there, so a later ``--undo`` can retry only the
+    unfinished work instead of counting already restored files as missing.
     """
     log = root / LOG_NAME
     if not log.exists():
         print(red(f"No {LOG_NAME} found in {root} - nothing to undo."))
         return 1
+
     entries = []
+    corrupt_lines = []
     for line in log.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line:
             continue
         try:
-            entries.append(json.loads(line))
-        except json.JSONDecodeError:
-            print(yellow(f"Skipping corrupt log line: {line[:60]}"))
+            entry = json.loads(line)
+            if not isinstance(entry, dict) or "from" not in entry or "to" not in entry:
+                raise ValueError("expected an object with from/to")
+            entries.append(entry)
+        except (json.JSONDecodeError, ValueError):
+            corrupt_lines.append(line)
+            print(yellow(f"Keeping corrupt log line for manual repair: {line[:60]}"))
+
     restored = missing = failed = 0
-    for e in reversed(entries):
-        src, dst = Path(e["to"]), Path(e["from"])
+    remaining = []
+    for entry in reversed(entries):
+        src, dst = Path(entry["to"]), Path(entry["from"])
         if not src.exists():
+            if dst.exists():
+                # This entry was already restored during an earlier retry.
+                continue
             missing += 1
-            print(yellow(f"  ? missing, skipped: {src.name}"))
+            remaining.append(entry)
+            print(yellow(f"  ? missing, kept in journal: {src.name}"))
             continue
         try:
             dst.parent.mkdir(parents=True, exist_ok=True)
@@ -212,21 +224,26 @@ def undo(root: Path) -> int:
             print(dim(f"  restored {src.name} -> {actual}"))
         except OSError as err:
             failed += 1
+            remaining.append(entry)
             print(red(f"  ! failed: {src.name} ({err})"))
-    if missing or failed:
+
+    if remaining or corrupt_lines:
+        with log.open("w", encoding="utf-8") as handle:
+            for entry in reversed(remaining):
+                handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
+            for line in corrupt_lines:
+                handle.write(line + "\n")
         print(yellow(
             f"Undo finished with problems: {restored} restored, {missing} missing, "
-            f"{failed} failed.\n"
-            f"  Journal kept for retry: {log} (fix the cause and run --undo again;\n"
-            f"  already restored files will be skipped as missing)."))
+            f"{failed} failed. Journal kept for retry: {log}"))
         return 1
+
     log.unlink()
-    # clean up folders we emptied (only dirs that files were moved out of)
     touched = {Path(e["from"]).parent for e in entries}
-    for d in sorted(touched, key=lambda p: len(p.parts), reverse=True):
-        if d != root and d.is_dir() and not any(d.iterdir()):
+    for directory in sorted(touched, key=lambda p: len(p.parts), reverse=True):
+        if directory != root and directory.is_dir() and not any(directory.iterdir()):
             try:
-                d.rmdir()
+                directory.rmdir()
             except OSError:
                 pass
     print(green(f"Undo complete: {restored} restored, {missing} missing, {failed} failed."))
@@ -288,7 +305,7 @@ def main(argv: list[str] | None = None) -> int:
     for src, err in failed:
         print(red(f"  ! {src.name}: {err}"))
     print(dim(f"Log written to {root / LOG_NAME} (revert with --undo)."))
-    return 0
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":
